@@ -26,14 +26,16 @@ parser.add_argument('--color_depth', type=str, default='8',
                     help='Number of bit per channel used for output. Either 8 or 16.')
 parser.add_argument('--format', type=str, default='PNG',
                     help='Format of files generated. Either PNG or OPEN_EXR')
-parser.add_argument('--scene_path', type=str, default='./scenes',
+parser.add_argument('--scene_path', type=str, default='/home/hanyang/code/gen_scene/3d_front/scene',
                     help='the path of scene obj files')
-parser.add_argument('--json_path', type=str, default='./3D-FRONT',
+parser.add_argument('--json_path', type=str, default='/home/hanyang/code/gen_scene/3d_front/3D-FRONT',
                     help='the path of scene json files')
+parser.add_argument('--save_path', type=str, default='rendered')
 parser.add_argument('--res', type=float, default=512,
                     help='render image resolution.')
+parser.add_argument('--debug', default=False, action='store_true',)
 
-argv = sys.argv[sys.argv.index("--") + 1:]
+argv = sys.argv[sys.argv.index("render.py") + 1:]
 args = parser.parse_args(argv)
 
 import bpy
@@ -67,6 +69,10 @@ def point_at(obj, target, roll=0):
     obj.matrix_world = quat * rollMatrix
     obj.location = loc
 
+if args.debug:
+    import pdb
+    pdb.set_trace()
+
 ### setting
 bpy.context.scene.use_nodes = True
 tree = bpy.context.scene.node_tree
@@ -78,6 +84,7 @@ bpy.context.scene.render.layers["RenderLayer"].use_pass_normal = True
 bpy.context.scene.render.layers["RenderLayer"].use_pass_environment = True
 bpy.context.scene.render.image_settings.file_format = args.format
 bpy.context.scene.render.image_settings.color_depth = args.color_depth
+bpy.context.scene.render.image_settings.color_mode = 'RGB'
 
 # Clear default nodes
 for n in tree.nodes:
@@ -95,9 +102,6 @@ else:
     normalize = tree.nodes.new(type="CompositorNodeNormalize")
     links.new(render_layers.outputs['Depth'], normalize.inputs[0])
     links.new(normalize.outputs[0], depth_file_output.inputs[0])
-
-
-
 
 scale_normal = tree.nodes.new(type="CompositorNodeMixRGB")
 scale_normal.blend_type = 'MULTIPLY'
@@ -119,22 +123,104 @@ albedo_file_output = tree.nodes.new(type="CompositorNodeOutputFile")
 albedo_file_output.label = 'Albedo Output'
 links.new(render_layers.outputs['Env'], albedo_file_output.inputs[0])
 
+# --- Add the RGB File Output node ---
+rgb_file_output = tree.nodes.new(type="CompositorNodeOutputFile")
+rgb_file_output.label = 'RGB Output'
+links.new(render_layers.outputs['Image'], rgb_file_output.inputs[0])
+assert "Combined" not in render_layers.outputs
+
+# --- IMPORTANT: Add a Composite node to finalize the render ---
+composite = tree.nodes.new(type="CompositorNodeComposite")
+links.new(render_layers.outputs['Image'], composite.inputs[0])
+assert "Combined" not in render_layers.outputs
+
+
 # Delete default cube
 bpy.data.objects['Cube'].select = True
 bpy.ops.object.delete()
-bpy.data.objects['Lamp'].select = True
-bpy.ops.object.delete()
+# bpy.data.objects['Lamp'].select = True
+# bpy.ops.object.delete()
+
+
+def assign_texture_to_obj(obj, tex_filepath):
+    # Check if the texture file exists
+    if not os.path.exists(tex_filepath):
+        print("Texture file " + tex_filepath + " not found for object " + obj.name)
+        return
+
+    # Create a new material or get an existing one.
+    # Here we create a new material for simplicity.
+    mat = bpy.data.materials.new(name = "Material_" + obj.name)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+
+    # Clear default nodes
+    for node in nodes:
+        nodes.remove(node)
+
+    # Create shader nodes: Image Texture, Principled BSDF, and Material Output
+    tex_node = nodes.new(type="ShaderNodeTexImage")
+    try:
+        tex_node.image = bpy.data.images.load(tex_filepath)
+    except Exception as e:
+        print("Failed to load image " + tex_filepath + e)
+        return
+
+    bsdf_node = nodes.new(type="ShaderNodeBsdfPrincipled")
+    output_node = nodes.new(type="ShaderNodeOutputMaterial")
+
+    # Arrange nodes (optional, for clarity in the node editor)
+    tex_node.location = (-300, 300)
+    bsdf_node.location = (0, 300)
+    output_node.location = (300, 300)
+
+    # Link the texture node's color output to the Base Color of the BSDF
+    links.new(tex_node.outputs['Color'], bsdf_node.inputs['Base Color'])
+    # Link the BSDF shader output to the Material Output
+    links.new(bsdf_node.outputs['BSDF'], output_node.inputs['Surface'])
+
+    # Assign the material to the object.
+    if obj.data.materials:
+        obj.data.materials[0] = mat
+    else:
+        obj.data.materials.append(mat)
+        
+
+def import_obj_with_texture(obj_filepath, tex_filepath):
+    # Import the OBJ file.
+    bpy.ops.import_scene.obj(filepath=obj_filepath)
+    
+    # The importer may import several objects from the file.
+    # You can iterate over all mesh objects in the current scene that were just imported.
+    # One simple strategy is to process all selected objects.
+    imported_objects = [obj for obj in bpy.context.selected_objects if obj.type == 'MESH']
+    
+    for obj in imported_objects:
+        assign_texture_to_obj(obj, tex_filepath)
+    
+    # Deselect all after processing.
+    bpy.ops.object.select_all(action='DESELECT')
+
     
 # render main function
-def render_function(model_list, texture_file, cam_info, save_path):
+def render_function(model_list, texture_list, cam_info, save_path):
         
     try: 
-        for model in model_list:
-            bpy.ops.import_scene.obj(filepath=model)
-    except: 
+        # Import each obj and assign its corresponding texture.
+        for model, tex in zip(model_list, texture_list):
+            import_obj_with_texture(model, tex)
+    except Exception as e:
+        print("Error during import: " + e)
         return None
+    
+    # # ===== ADD SUN LIGHT HERE =====
+    # # Add sun light after setting world background
+    # bpy.ops.object.light_add(type='SUN', radius=1, location=(0, -5, 5))
+    # sun = bpy.context.object
+    # sun.data.energy = 1.0  # Adjust as needed
 
-    # bpy.context.scene.render.engine = 'CYCLES'
+    bpy.context.scene.render.engine = 'CYCLES'
     for object in bpy.context.scene.objects:
         if object.name in ['Camera']:
             object.select = False
@@ -169,7 +255,7 @@ def render_function(model_list, texture_file, cam_info, save_path):
 
 
 
-    for output_node in [depth_file_output, normal_file_output, albedo_file_output]:
+    for output_node in [depth_file_output, normal_file_output, albedo_file_output, rgb_file_output]:
         output_node.base_path = ''
 
     
@@ -181,6 +267,7 @@ def render_function(model_list, texture_file, cam_info, save_path):
 
         depth_file_output.file_slots[0].path = os.path.join(save_path, 'depth_%02d'%(idx))
         normal_file_output.file_slots[0].path = os.path.join(save_path, 'normal_%02d'%(idx)) 
+        rgb_file_output.file_slots[0].path = os.path.join(save_path, 'rgb_%02d' % (idx))
         bpy.ops.render.render(write_still=True)
         idx += 1
 
@@ -209,6 +296,9 @@ for scene in scene_list:
     camera = AdaptedCameras(os.path.join(args.json_path, scene+'.json'))
     cam_info = camera.run()
     
+    save_dir = os.path.join(args.save_path, scene)
+    os.makedirs(save_dir, exist_ok=True)
+    
     for room in room_list:
         
         if os.path.isfile(os.path.join(args.scene_path, scene, room)):
@@ -218,5 +308,6 @@ for scene in scene_list:
                 continue
             mesh_list.append(os.path.join(args.scene_path, scene, room, obj_name))
             tex_list.append(os.path.join(args.scene_path, scene, room, obj_name.replace('obj','png')))
-    render_function(mesh_list,tex_list,cam_info, os.path.join(args.scene_path, scene))
+    assert len(mesh_list) == len(tex_list), "Not the same length! " + len(mesh_list) + len(tex_list)
+    render_function(mesh_list, tex_list, cam_info, save_dir)
 
