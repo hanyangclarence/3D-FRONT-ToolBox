@@ -26,9 +26,9 @@ parser.add_argument('--color_depth', type=str, default='8',
                     help='Number of bit per channel used for output. Either 8 or 16.')
 parser.add_argument('--format', type=str, default='PNG',
                     help='Format of files generated. Either PNG or OPEN_EXR')
-parser.add_argument('--scene_path', type=str, default='/home/hanyang/code/gen_scene/3d_front/scene',
+parser.add_argument('--scene_path', type=str, default='../../3d_front/scene',
                     help='the path of scene obj files')
-parser.add_argument('--json_path', type=str, default='/home/hanyang/code/gen_scene/3d_front/3D-FRONT',
+parser.add_argument('--json_path', type=str, default='../../3d_front/3D-FRONT',
                     help='the path of scene json files')
 parser.add_argument('--save_path', type=str, default='rendered')
 parser.add_argument('--res', type=float, default=512,

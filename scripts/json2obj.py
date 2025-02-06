@@ -41,8 +41,12 @@ for m in files:
     if not '.json' in m:
         continue
 
-    scene = read_json(args.json_path+'/'+m, Config.FUTURE_PATH)
-    scene.output(args.save_path)
-
+    try:
+        scene = read_json(args.json_path+'/'+m, Config.FUTURE_PATH)
+        scene.output(args.save_path)
+    except Exception as e:
+        print(e)
+        print('error in processing', m)
+        continue
 
     
